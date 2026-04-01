@@ -1,0 +1,68 @@
+body {
+    background: linear-gradient(135deg, #020617, #0f172a);
+    color: white;
+    font-family: Arial;
+    text-align: center;
+}
+
+h1 {
+    margin: 20px;
+    font-size: 40px;
+}
+
+.formulario {
+    margin: 20px;
+}
+
+input, select, button {
+    padding: 10px;
+    margin: 5px;
+    border-radius: 10px;
+    border: none;
+}
+
+button {
+    background: #2563eb;
+    color: white;
+    cursor: pointer;
+}
+
+.contenedor {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 20px;
+}
+
+.grupo {
+    background: rgba(255,255,255,0.08);
+    padding: 20px;
+    border-radius: 20px;
+    width: 600px;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th {
+    background: #1e3a8a;
+    padding: 8px;
+}
+
+td {
+    padding: 8px;
+}
+
+.ok {
+    background: rgba(0,255,100,0.2);
+}
+
+.bad {
+    background: rgba(255,0,0,0.2);
+}
+
+tr:hover {
+    transform: scale(1.02);
+}
