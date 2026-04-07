@@ -5,7 +5,9 @@ import string
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = "modo-fifa-secret"
-socketio = SocketIO(app)
+
+# Para Render y producción
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 salas = {}
 
@@ -59,9 +61,9 @@ def calcular_goles(equipo):
 
 
 def obtener_equipo(sala, nombre):
-    for e in sala["equipos"]:
-        if e["nombre"] == nombre:
-            return e
+    for equipo in sala["equipos"]:
+        if equipo["nombre"] == nombre:
+            return equipo
     return None
 
 
@@ -85,6 +87,7 @@ def index():
 @socketio.on("crear_sala")
 def crear_sala(data):
     nombre = (data.get("nombre") or "").strip()
+
     if not nombre:
         emit("error_msg", {"mensaje": "Poné tu nombre."})
         return
@@ -105,7 +108,7 @@ def crear_sala(data):
         "listos": 0,
         "partido": None,
         "historial": [],
-        "mensaje": f"{nombre} creó la sala.",
+        "mensaje": f"{nombre} creó la sala."
     }
 
     join_room(codigo)
@@ -154,17 +157,17 @@ def elegir_equipo(data):
     sala = salas[codigo]
 
     jugador_actual = None
-    for j in sala["jugadores"]:
-        if j["sid"] == request.sid:
-            jugador_actual = j
+    for jugador in sala["jugadores"]:
+        if jugador["sid"] == request.sid:
+            jugador_actual = jugador
             break
 
     if not jugador_actual:
         emit("error_msg", {"mensaje": "No estás dentro de esta sala."})
         return
 
-    for j in sala["jugadores"]:
-        if j["sid"] != request.sid and j["equipo"] == equipo:
+    for jugador in sala["jugadores"]:
+        if jugador["sid"] != request.sid and jugador["equipo"] == equipo:
             emit("error_msg", {"mensaje": "Ese equipo ya fue elegido."})
             return
 
@@ -184,9 +187,9 @@ def jugador_listo(data):
     sala = salas[codigo]
 
     jugador_actual = None
-    for j in sala["jugadores"]:
-        if j["sid"] == request.sid:
-            jugador_actual = j
+    for jugador in sala["jugadores"]:
+        if jugador["sid"] == request.sid:
+            jugador_actual = jugador
             break
 
     if not jugador_actual:
@@ -216,7 +219,16 @@ def jugador_listo(data):
         elif g2 > g1:
             ganador = j2["nombre"]
         else:
-            ganador = "Empate"
+            pen1 = random.randint(3, 5)
+            pen2 = random.randint(3, 5)
+
+            while pen1 == pen2:
+                pen2 = random.randint(3, 5)
+
+            if pen1 > pen2:
+                ganador = f"{j1['nombre']} (penales {pen1}-{pen2})"
+            else:
+                ganador = f"{j2['nombre']} (penales {pen2}-{pen1})"
 
         sala["partido"] = {
             "local_nombre": j1["nombre"],
@@ -231,7 +243,6 @@ def jugador_listo(data):
         sala["historial"].append(sala["partido"])
         sala["mensaje"] = "Partido jugado."
         sala["listos"] = 0
-
     else:
         sala["mensaje"] = f"{jugador_actual['nombre']} está listo."
 
@@ -253,18 +264,51 @@ def reiniciar_partido(data):
     emit("estado_sala", estado_publico(sala), to=codigo)
 
 
+@socketio.on("mensaje_chat")
+def mensaje_chat(data):
+    codigo = (data.get("codigo") or "").strip().upper()
+    mensaje = (data.get("mensaje") or "").strip()
+
+    if not codigo or codigo not in salas:
+        emit("error_msg", {"mensaje": "Sala no encontrada."})
+        return
+
+    if not mensaje:
+        return
+
+    nombre = "Jugador"
+    for jugador in salas[codigo]["jugadores"]:
+        if jugador["sid"] == request.sid:
+            nombre = jugador["nombre"]
+            break
+
+    emit("chat", {"autor": nombre, "mensaje": mensaje}, to=codigo)
+
+
 @socketio.on("disconnect")
 def salir():
     sala_a_borrar = None
 
-    for codigo, sala in salas.items():
+    for codigo, sala in list(salas.items()):
         antes = len(sala["jugadores"])
-        sala["jugadores"] = [j for j in sala["jugadores"] if j["sid"] != request.sid]
+        nombre_que_salio = None
+
+        nuevos_jugadores = []
+        for jugador in sala["jugadores"]:
+            if jugador["sid"] == request.sid:
+                nombre_que_salio = jugador["nombre"]
+            else:
+                nuevos_jugadores.append(jugador)
+
+        sala["jugadores"] = nuevos_jugadores
 
         if len(sala["jugadores"]) != antes:
             sala["listos"] = 0
             sala["partido"] = None
-            sala["mensaje"] = "Un jugador salió de la sala."
+            if nombre_que_salio:
+                sala["mensaje"] = f"{nombre_que_salio} salió de la sala."
+            else:
+                sala["mensaje"] = "Un jugador salió de la sala."
             emit("estado_sala", estado_publico(sala), to=codigo)
 
         if len(sala["jugadores"]) == 0:
