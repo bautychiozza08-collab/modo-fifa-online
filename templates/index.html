@@ -1,78 +1,155 @@
 <!DOCTYPE html>
-<html>
+<html lang="es">
 <head>
-<title>Modo FIFA</title>
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Modo FIFA Online</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 </head>
 <body>
+    <div class="container">
+        <h1 class="titulo">🌐 MODO FIFA ONLINE</h1>
 
-<h1>🎮 MODO FIFA</h1>
+        <div class="panel" id="loginPanel">
+            <h2>Entrar al juego</h2>
+            <input type="text" id="nombre" placeholder="Tu nombre">
+            <div class="botones-login">
+                <button onclick="crearSala()">Crear sala</button>
+            </div>
+            <div class="join-box">
+                <input type="text" id="codigo" placeholder="Código de sala">
+                <button onclick="unirseSala()">Unirse</button>
+            </div>
+        </div>
 
-{% if not equipo_usuario %}
-<form method="POST">
-<select name="equipo">
-{% for e in grupos["Grupo A"] %}
-<option>{{ e.nombre }}</option>
-{% endfor %}
-</select>
-<button name="elegir">Elegir equipo</button>
-</form>
-{% else %}
+        <div class="panel oculto" id="salaPanel">
+            <h2>🎟️ Sala: <span id="codigoSala"></span></h2>
+            <p id="mensajeSala">Esperando jugadores...</p>
 
-<h2>Tu equipo: {{ equipo_usuario }} | 💰 {{ dinero }}</h2>
+            <div class="estado-grid">
+                <div class="subpanel">
+                    <h3>Jugadores</h3>
+                    <ul id="listaJugadores"></ul>
+                </div>
 
-<form method="POST">
-<button name="jugar">⚽ Jugar</button>
-<button name="simular">🤖 Simular</button>
-<button name="reset">🔄 Reset</button>
-</form>
+                <div class="subpanel">
+                    <h3>Elegir equipo</h3>
+                    <select id="equipoSelect"></select>
+                    <button onclick="elegirEquipo()">Elegir equipo</button>
+                    <button onclick="listo()">Estoy listo</button>
+                    <button onclick="reiniciar()">Nueva ronda</button>
+                </div>
+            </div>
+        </div>
 
-<h2>💰 Mercado</h2>
-<form method="POST">
-<select name="jugador">
-{% for e in grupos["Grupo A"] %}
-    {% for j in e.jugadores %}
-    <option value="{{ j.nombre }}">{{ j.nombre }} (${{ j.precio }})</option>
-    {% endfor %}
-{% endfor %}
-</select>
-<button name="fichar">Comprar</button>
-</form>
+        <div class="panel oculto" id="partidoPanel">
+            <h2>⚽ Partido</h2>
+            <div class="marcador" id="marcador"></div>
+            <div class="mvp" id="ganadorTexto"></div>
+        </div>
 
-{% endif %}
+        <div class="panel oculto" id="historialPanel">
+            <h2>📜 Historial</h2>
+            <ul id="historialLista"></ul>
+        </div>
 
-<h2>📊 Tabla</h2>
-<table>
-<tr><th>#</th><th>Equipo</th><th>PTS</th><th>DG</th></tr>
-{% for e in tabla["Grupo A"] %}
-<tr>
-<td>{{ loop.index }}</td>
-<td>{{ e.equipo }}</td>
-<td>{{ e.pts }}</td>
-<td>{{ e.gf - e.gc }}</td>
-</tr>
-{% endfor %}
-</table>
+        <div class="error-box" id="errorBox"></div>
+    </div>
 
-<h2>🏆 Final</h2>
-<form method="POST">
-<button name="final">Generar Final</button>
-<button name="jugar_final">Jugar Final</button>
-</form>
+<script>
+const socket = io();
 
-{% if campeon %}
-<h1>🏆 CAMPEÓN: {{ campeon }}</h1>
-{% endif %}
+let codigoActual = "";
 
-<h2>👥 Jugadores</h2>
-{% for e in grupos["Grupo A"] %}
-<b>{{ e.nombre }}</b>
-<ul>
-{% for j in e.jugadores %}
-<li>{{ j.nombre }} ⚽{{ j.goles }} 🔥{{ j.forma }}</li>
-{% endfor %}
-</ul>
-{% endfor %}
+socket.on("sala_creada", (data) => {
+    codigoActual = data.codigo;
+    mostrarSala(data.estado);
+});
 
+socket.on("estado_sala", (estado) => {
+    codigoActual = estado.codigo;
+    mostrarSala(estado);
+});
+
+socket.on("error_msg", (data) => {
+    const box = document.getElementById("errorBox");
+    box.innerText = data.mensaje;
+    box.style.display = "block";
+    setTimeout(() => {
+        box.style.display = "none";
+    }, 3000);
+});
+
+function crearSala() {
+    const nombre = document.getElementById("nombre").value.trim();
+    socket.emit("crear_sala", { nombre });
+}
+
+function unirseSala() {
+    const nombre = document.getElementById("nombre").value.trim();
+    const codigo = document.getElementById("codigo").value.trim().toUpperCase();
+    socket.emit("unirse_sala", { nombre, codigo });
+}
+
+function elegirEquipo() {
+    const equipo = document.getElementById("equipoSelect").value;
+    socket.emit("elegir_equipo", { codigo: codigoActual, equipo });
+}
+
+function listo() {
+    socket.emit("jugador_listo", { codigo: codigoActual });
+}
+
+function reiniciar() {
+    socket.emit("reiniciar_partido", { codigo: codigoActual });
+}
+
+function mostrarSala(estado) {
+    document.getElementById("loginPanel").classList.add("oculto");
+    document.getElementById("salaPanel").classList.remove("oculto");
+    document.getElementById("historialPanel").classList.remove("oculto");
+
+    document.getElementById("codigoSala").innerText = estado.codigo;
+    document.getElementById("mensajeSala").innerText = estado.mensaje;
+
+    const lista = document.getElementById("listaJugadores");
+    lista.innerHTML = "";
+    estado.jugadores.forEach(j => {
+        const li = document.createElement("li");
+        li.textContent = `${j.nombre} ${j.equipo ? "- " + j.equipo : "- sin equipo"}`;
+        lista.appendChild(li);
+    });
+
+    const select = document.getElementById("equipoSelect");
+    select.innerHTML = "";
+    estado.equipos.forEach(eq => {
+        const option = document.createElement("option");
+        option.value = eq;
+        option.textContent = eq;
+        select.appendChild(option);
+    });
+
+    const historialLista = document.getElementById("historialLista");
+    historialLista.innerHTML = "";
+    estado.historial.slice().reverse().forEach(p => {
+        const li = document.createElement("li");
+        li.textContent = `${p.local_equipo} ${p.g1} - ${p.g2} ${p.visitante_equipo} | Ganador: ${p.ganador}`;
+        historialLista.appendChild(li);
+    });
+
+    if (estado.partido) {
+        document.getElementById("partidoPanel").classList.remove("oculto");
+        document.getElementById("marcador").innerHTML = `
+            <div>${estado.partido.local_nombre}<br><strong>${estado.partido.local_equipo}</strong></div>
+            <div class="resultado">${estado.partido.g1} - ${estado.partido.g2}</div>
+            <div>${estado.partido.visitante_nombre}<br><strong>${estado.partido.visitante_equipo}</strong></div>
+        `;
+        document.getElementById("ganadorTexto").innerText = `🏆 ${estado.partido.ganador}`;
+    } else {
+        document.getElementById("partidoPanel").classList.add("oculto");
+    }
+}
+</script>
 </body>
 </html>

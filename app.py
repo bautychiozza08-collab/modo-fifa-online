@@ -1,175 +1,278 @@
-from flask import Flask, render_template, request, redirect
+from flask import Flask, render_template, request
+from flask_socketio import SocketIO, emit, join_room
 import random
+import string
 
 app = Flask(__name__)
+app.config["SECRET_KEY"] = "modo-fifa-secret"
+socketio = SocketIO(app)
 
-equipo_usuario = None
-dinero = 200
-final = None
-campeon = None
+salas = {}
 
-# =========================
-# DATOS
-# =========================
-grupos = {
-    "Grupo A": [
-        {
-            "nombre": "Real Madrid",
-            "jugadores": [
-                {"nombre": "Vinicius", "skill": 90, "forma": 80, "goles": 0, "precio": 120},
-                {"nombre": "Bellingham", "skill": 88, "forma": 85, "goles": 0, "precio": 110},
-            ]
-        },
-        {
-            "nombre": "Bayern",
-            "jugadores": [
-                {"nombre": "Kane", "skill": 92, "forma": 85, "goles": 0, "precio": 130},
-                {"nombre": "Musiala", "skill": 87, "forma": 82, "goles": 0, "precio": 100},
-            ]
-        },
-        {
-            "nombre": "Inter",
-            "jugadores": [
-                {"nombre": "Lautaro", "skill": 88, "forma": 83, "goles": 0, "precio": 105},
-            ]
-        },
-        {
-            "nombre": "Benfica",
-            "jugadores": [
-                {"nombre": "Di Maria", "skill": 87, "forma": 82, "goles": 0, "precio": 95},
-            ]
+
+def crear_codigo():
+    while True:
+        codigo = "".join(random.choices(string.ascii_uppercase + string.digits, k=5))
+        if codigo not in salas:
+            return codigo
+
+
+def datos_iniciales():
+    return {
+        "equipos": [
+            {
+                "nombre": "Real Madrid",
+                "jugadores": [
+                    {"nombre": "Vinicius", "skill": 90, "forma": 80},
+                    {"nombre": "Bellingham", "skill": 88, "forma": 85},
+                ]
+            },
+            {
+                "nombre": "Bayern",
+                "jugadores": [
+                    {"nombre": "Kane", "skill": 92, "forma": 85},
+                    {"nombre": "Musiala", "skill": 87, "forma": 82},
+                ]
+            },
+            {
+                "nombre": "Inter",
+                "jugadores": [
+                    {"nombre": "Lautaro", "skill": 88, "forma": 83},
+                    {"nombre": "Barella", "skill": 84, "forma": 80},
+                ]
+            },
+            {
+                "nombre": "Benfica",
+                "jugadores": [
+                    {"nombre": "Di Maria", "skill": 87, "forma": 82},
+                    {"nombre": "Rafa Silva", "skill": 83, "forma": 79},
+                ]
+            }
+        ]
+    }
+
+
+def calcular_goles(equipo):
+    jugadores = equipo["jugadores"]
+    promedio = sum(j["skill"] + j["forma"] for j in jugadores) // len(jugadores)
+    return promedio // 25 + random.randint(0, 2)
+
+
+def obtener_equipo(sala, nombre):
+    for e in sala["equipos"]:
+        if e["nombre"] == nombre:
+            return e
+    return None
+
+
+def estado_publico(sala):
+    return {
+        "codigo": sala["codigo"],
+        "jugadores": sala["jugadores"],
+        "equipos": [e["nombre"] for e in sala["equipos"]],
+        "listos": sala["listos"],
+        "partido": sala["partido"],
+        "historial": sala["historial"][-5:],
+        "mensaje": sala["mensaje"],
+    }
+
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@socketio.on("crear_sala")
+def crear_sala(data):
+    nombre = (data.get("nombre") or "").strip()
+    if not nombre:
+        emit("error_msg", {"mensaje": "Poné tu nombre."})
+        return
+
+    codigo = crear_codigo()
+    base = datos_iniciales()
+
+    salas[codigo] = {
+        "codigo": codigo,
+        "jugadores": [
+            {
+                "sid": request.sid,
+                "nombre": nombre,
+                "equipo": None
+            }
+        ],
+        "equipos": base["equipos"],
+        "listos": 0,
+        "partido": None,
+        "historial": [],
+        "mensaje": f"{nombre} creó la sala.",
+    }
+
+    join_room(codigo)
+    emit("sala_creada", {"codigo": codigo, "estado": estado_publico(salas[codigo])})
+
+
+@socketio.on("unirse_sala")
+def unirse_sala(data):
+    nombre = (data.get("nombre") or "").strip()
+    codigo = (data.get("codigo") or "").strip().upper()
+
+    if not nombre or not codigo:
+        emit("error_msg", {"mensaje": "Completá nombre y código."})
+        return
+
+    if codigo not in salas:
+        emit("error_msg", {"mensaje": "La sala no existe."})
+        return
+
+    sala = salas[codigo]
+
+    if len(sala["jugadores"]) >= 2:
+        emit("error_msg", {"mensaje": "La sala ya está llena."})
+        return
+
+    sala["jugadores"].append({
+        "sid": request.sid,
+        "nombre": nombre,
+        "equipo": None
+    })
+
+    sala["mensaje"] = f"{nombre} se unió a la sala."
+    join_room(codigo)
+    emit("estado_sala", estado_publico(sala), to=codigo)
+
+
+@socketio.on("elegir_equipo")
+def elegir_equipo(data):
+    codigo = (data.get("codigo") or "").strip().upper()
+    equipo = data.get("equipo")
+
+    if codigo not in salas:
+        emit("error_msg", {"mensaje": "Sala no encontrada."})
+        return
+
+    sala = salas[codigo]
+
+    jugador_actual = None
+    for j in sala["jugadores"]:
+        if j["sid"] == request.sid:
+            jugador_actual = j
+            break
+
+    if not jugador_actual:
+        emit("error_msg", {"mensaje": "No estás dentro de esta sala."})
+        return
+
+    for j in sala["jugadores"]:
+        if j["sid"] != request.sid and j["equipo"] == equipo:
+            emit("error_msg", {"mensaje": "Ese equipo ya fue elegido."})
+            return
+
+    jugador_actual["equipo"] = equipo
+    sala["mensaje"] = f"{jugador_actual['nombre']} eligió {equipo}."
+    emit("estado_sala", estado_publico(sala), to=codigo)
+
+
+@socketio.on("jugador_listo")
+def jugador_listo(data):
+    codigo = (data.get("codigo") or "").strip().upper()
+
+    if codigo not in salas:
+        emit("error_msg", {"mensaje": "Sala no encontrada."})
+        return
+
+    sala = salas[codigo]
+
+    jugador_actual = None
+    for j in sala["jugadores"]:
+        if j["sid"] == request.sid:
+            jugador_actual = j
+            break
+
+    if not jugador_actual:
+        emit("error_msg", {"mensaje": "No estás dentro de esta sala."})
+        return
+
+    if not jugador_actual["equipo"]:
+        emit("error_msg", {"mensaje": "Primero elegí un equipo."})
+        return
+
+    sala["listos"] += 1
+    if sala["listos"] > len(sala["jugadores"]):
+        sala["listos"] = len(sala["jugadores"])
+
+    if len(sala["jugadores"]) == 2 and sala["listos"] == 2:
+        j1 = sala["jugadores"][0]
+        j2 = sala["jugadores"][1]
+
+        eq1 = obtener_equipo(sala, j1["equipo"])
+        eq2 = obtener_equipo(sala, j2["equipo"])
+
+        g1 = calcular_goles(eq1)
+        g2 = calcular_goles(eq2)
+
+        if g1 > g2:
+            ganador = j1["nombre"]
+        elif g2 > g1:
+            ganador = j2["nombre"]
+        else:
+            ganador = "Empate"
+
+        sala["partido"] = {
+            "local_nombre": j1["nombre"],
+            "local_equipo": j1["equipo"],
+            "visitante_nombre": j2["nombre"],
+            "visitante_equipo": j2["equipo"],
+            "g1": g1,
+            "g2": g2,
+            "ganador": ganador
         }
-    ]
-}
 
-tabla = {"Grupo A": []}
+        sala["historial"].append(sala["partido"])
+        sala["mensaje"] = "Partido jugado."
+        sala["listos"] = 0
 
-def iniciar_tabla():
-    tabla["Grupo A"] = []
-    for e in grupos["Grupo A"]:
-        tabla["Grupo A"].append({
-            "equipo": e["nombre"],
-            "pts":0,"pj":0,"gf":0,"gc":0
-        })
-
-iniciar_tabla()
-
-# =========================
-# FUNCIONES
-# =========================
-def obtener_equipo(nombre):
-    return next(e for e in grupos["Grupo A"] if e["nombre"] == nombre)
-
-def calcular_goles(eq):
-    prom = sum(j["skill"]+j["forma"] for j in eq["jugadores"]) // len(eq["jugadores"])
-    return prom//25 + random.randint(0,2)
-
-def mejorar(eq, goles):
-    for _ in range(goles):
-        j = random.choice(eq["jugadores"])
-        j["goles"] += 1
-        j["forma"] = min(100, j["forma"]+3)
-
-def actualizar(eq1, eq2, g1, g2):
-    t = tabla["Grupo A"]
-    e1 = next(e for e in t if e["equipo"]==eq1)
-    e2 = next(e for e in t if e["equipo"]==eq2)
-
-    e1["pj"]+=1; e2["pj"]+=1
-    e1["gf"]+=g1; e1["gc"]+=g2
-    e2["gf"]+=g2; e2["gc"]+=g1
-
-    if g1>g2: e1["pts"]+=3
-    elif g2>g1: e2["pts"]+=3
     else:
-        e1["pts"]+=1
-        e2["pts"]+=1
+        sala["mensaje"] = f"{jugador_actual['nombre']} está listo."
 
-# =========================
-# RUTA
-# =========================
-@app.route("/", methods=["GET","POST"])
-def home():
-    global equipo_usuario, dinero, final, campeon
+    emit("estado_sala", estado_publico(sala), to=codigo)
 
-    if request.method == "POST":
 
-        if "elegir" in request.form:
-            equipo_usuario = request.form["equipo"]
+@socketio.on("reiniciar_partido")
+def reiniciar_partido(data):
+    codigo = (data.get("codigo") or "").strip().upper()
 
-        if "jugar" in request.form and equipo_usuario:
-            rival = random.choice([e for e in grupos["Grupo A"] if e["nombre"] != equipo_usuario])
-            eq1 = obtener_equipo(equipo_usuario)
-            eq2 = rival
+    if codigo not in salas:
+        emit("error_msg", {"mensaje": "Sala no encontrada."})
+        return
 
-            g1 = calcular_goles(eq1)
-            g2 = calcular_goles(eq2)
+    sala = salas[codigo]
+    sala["partido"] = None
+    sala["listos"] = 0
+    sala["mensaje"] = "Nueva ronda lista."
+    emit("estado_sala", estado_publico(sala), to=codigo)
 
-            actualizar(eq1["nombre"], eq2["nombre"], g1, g2)
-            mejorar(eq1, g1)
-            mejorar(eq2, g2)
 
-        if "simular" in request.form:
-            eq1, eq2 = random.sample(grupos["Grupo A"], 2)
+@socketio.on("disconnect")
+def salir():
+    sala_a_borrar = None
 
-            g1 = calcular_goles(eq1)
-            g2 = calcular_goles(eq2)
+    for codigo, sala in salas.items():
+        antes = len(sala["jugadores"])
+        sala["jugadores"] = [j for j in sala["jugadores"] if j["sid"] != request.sid]
 
-            actualizar(eq1["nombre"], eq2["nombre"], g1, g2)
-            mejorar(eq1, g1)
-            mejorar(eq2, g2)
+        if len(sala["jugadores"]) != antes:
+            sala["listos"] = 0
+            sala["partido"] = None
+            sala["mensaje"] = "Un jugador salió de la sala."
+            emit("estado_sala", estado_publico(sala), to=codigo)
 
-        # 💰 FICHAJES
-        if "fichar" in request.form and equipo_usuario:
-            nombre = request.form["jugador"]
+        if len(sala["jugadores"]) == 0:
+            sala_a_borrar = codigo
 
-            for equipo in grupos["Grupo A"]:
-                for j in equipo["jugadores"]:
-                    if j["nombre"] == nombre and dinero >= j["precio"]:
-                        dinero -= j["precio"]
-                        user_team = obtener_equipo(equipo_usuario)
-                        user_team["jugadores"].append(j)
-                        equipo["jugadores"].remove(j)
-                        break
+    if sala_a_borrar:
+        del salas[sala_a_borrar]
 
-        # 🏆 FINAL
-        if "final" in request.form:
-            mejores = sorted(tabla["Grupo A"], key=lambda x:x["pts"], reverse=True)[:2]
-            final = (mejores[0]["equipo"], mejores[1]["equipo"])
-
-        if "jugar_final" in request.form and final:
-            eq1 = obtener_equipo(final[0])
-            eq2 = obtener_equipo(final[1])
-
-            g1 = calcular_goles(eq1)
-            g2 = calcular_goles(eq2)
-
-            campeon = final[0] if g1 > g2 else final[1]
-
-        if "reset" in request.form:
-            iniciar_tabla()
-            dinero = 200
-            equipo_usuario = None
-            campeon = None
-            for e in grupos["Grupo A"]:
-                for j in e["jugadores"]:
-                    j["goles"]=0
-                    j["forma"]=80
-
-        tabla["Grupo A"].sort(key=lambda x:(x["pts"], x["gf"]-x["gc"]), reverse=True)
-
-        return redirect("/")
-
-    tabla["Grupo A"].sort(key=lambda x:(x["pts"], x["gf"]-x["gc"]), reverse=True)
-
-    return render_template("index.html",
-        grupos=grupos,
-        tabla=tabla,
-        equipo_usuario=equipo_usuario,
-        dinero=dinero,
-        final=final,
-        campeon=campeon
-    )
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    socketio.run(app, debug=True)
